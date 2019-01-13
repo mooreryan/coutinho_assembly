@@ -40,5 +40,5 @@ Gem::Specification.new do |spec|
   spec.add_development_dependency "optimist", "~> 3.0"
   spec.add_development_dependency "rake", "~> 10.0"
   spec.add_development_dependency "rspec", "~> 3.0"
-  spec.add_development_dependency "rya", "~> 0.4"
+  spec.add_development_dependency "rya", "~> 0.5"
 end

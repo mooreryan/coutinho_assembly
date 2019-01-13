@@ -1,3 +1,241 @@
 #!/usr/bin/env ruby
 
+Signal.trap("SIGPIPE", "EXIT")
+
 require "coutinho_assembly"
+require "rya"
+require "optimist"
+require "pp"
+require "fileutils"
+
+# TODO ideally, if megahit fails, try and restart it with the --continue option rather than restart it from the beginning each time.
+
+Process.extend Rya::CoreExtensions::Process
+
+ASSEMBLY_PRESET = "fast"
+
+opts = Optimist.options do
+  version CoutinhoAssembly::VERSION_BANNER
+
+  banner <<-EOS
+  
+#{CoutinhoAssembly::VERSION_BANNER}
+  
+  Run Coutinho's Epic Assembly Pipeline!
+
+  It's based on Coutinho's epic 2017 paper:  https://doi.org/10.1038/ncomms15955
+
+  You need forward, reverse, and single currently.  I'll fix that at some point.
+
+  --take can be used if some of you jobs failed and you want to add a prefix to the new ones, like "take_2".
+
+  --max-attempts is the number of retries any external program gets before we just skip it and go on to the next step.
+
+  --sampling-percentage and --num-subsamples go together.  So, --sampling-percentage 1 5 10 --num-subsamples 50 35 25 would mean 50 1% subsamples, 35 5% subsamples, and 25 10% subsamples.
+
+  For the binary program options, either provide the path to the binary or the name of the program if the program is already on your path.
+
+  Options:
+  EOS
+
+  # Input reads
+  opt(:forward_reads,
+      "Forward reads",
+      type:  :string,
+      short: "-f")
+  opt(:reverse_reads,
+      "Reverse reads",
+      type:  :string,
+      short: "-r")
+  opt(:single_reads,
+      "Unpaired reads",
+      type:  :string,
+      short: "-s")
+
+  # Output options
+  opt(:out_dir,
+      "Output directory",
+      default: "coutinho_assembly")
+  opt(:take,
+      "If you want to prefix your contig files with something",
+      type:    :string,
+      default: "take_1")
+
+  # Sampling options
+  opt(:sampling_percentage,
+      "What percent(s) do you want to subsample?",
+      default: [1, 5, 10, 25, 50, 75])
+  opt(:num_subsamples,
+      "How many subsamples for each level?",
+      default: [50, 50, 25, 15, 10, 5])
+
+  # Pipeline options
+  opt(:num_threads,
+      "Number of threads to use",
+      default: 1)
+  opt(:max_attempts,
+      "Max no. retries before giving up on a pipeline step.",
+      default: 10)
+
+  # External programs I depend on
+  opt(:megahit_binary,
+      "Path to megahit binary",
+      default: "~/bin/megahit")
+  opt(:sample_seqs_binary,
+      "Path to sample_seqs binary",
+      default: "~/bin/sample_seqs")
+  opt(:zip_binary,
+      "Path to zipping program (e.g., pigz, gzip, bzip2",
+      default: "pigz")
+end
+
+Runners        = Class.new { extend CoutinhoAssembly::Runners }
+MegahitRunners = Class.new { extend CoutinhoAssembly::Runners::Megahit }
+
+forward_reads = opts[:forward_reads]
+reverse_reads = opts[:reverse_reads]
+single_reads  = opts[:single_reads]
+
+Rya::AbortIf.abort_unless File.exist?(forward_reads),
+                          "--forward-reads arg does not exist"
+Rya::AbortIf.abort_unless File.exist?(reverse_reads),
+                          "--reverse-reads arg does not exist"
+Rya::AbortIf.abort_unless File.exist?(single_reads),
+                          "--single-reads arg does not exist"
+
+take = opts[:take]
+
+out_dir = opts[:out_dir]
+FileUtils.mkdir_p out_dir
+
+subsample_dir = File.join out_dir, "subsamples"
+
+assembly_dir = File.join out_dir, "assembly_info"
+FileUtils.mkdir_p assembly_dir
+
+contigs_dir = File.join out_dir, "final_contigs"
+FileUtils.mkdir_p contigs_dir
+
+sampling_percentage = opts[:sampling_percentage]
+num_subsamples      = opts[:num_subsamples]
+
+sampling_info = sampling_percentage.zip num_subsamples
+
+Rya::AbortIf.abort_if sampling_percentage.any? { |perc| perc < 1 || perc > 99 },
+                      "--sampling-percentage must be between 1 and 99"
+
+Rya::AbortIf.abort_if num_subsamples.any? { |num| num < 1 },
+                      "--num-subsamples must be at least 1"
+
+Rya::AbortIf.abort_unless sampling_percentage.count == num_subsamples.count,
+                          "--sampling-percentage and --num-subsamples must have the same number of items"
+
+num_threads  = opts[:num_threads]
+max_attempts = opts[:max_attempts]
+
+Rya::AbortIf.abort_if num_threads < 1,
+                      "--num-threads must be at least 1"
+Rya::AbortIf.abort_if max_attempts < 1,
+                      "--max-attempts must be at least 1"
+
+megahit_binary     = opts[:megahit_binary]
+sample_seqs_binary = opts[:sample_seqs_binary]
+zip_binary         = opts[:zip_binary]
+
+# TODO check binaries
+
+
+num_attempts = 0
+
+sampling_info.each do |(percent, num_samples)|
+# First, get the subsamples.  The out_dir is subsample_dir, the file format is like subsample_dir/percent_NN.sample_M.{1,2,U}.fq
+  sample_seqs_out = nil
+  Process.time_it "Sampling reads", Rya::AbortIf.logger do
+    begin
+      num_attempts = Process.run_until_success max_attempts do
+        sample_seqs_out =
+          Runners.run_sample_seqs exe:                 sample_seqs_binary,
+                                  forward_reads:       forward_reads,
+                                  reverse_reads:       reverse_reads,
+                                  single_reads:        single_reads,
+                                  out_dir:             subsample_dir,
+                                  sampling_percentage: percent,
+                                  num_subsamples:      num_samples
+
+      end
+    rescue Rya::MaxAttemptsExceededError => err
+      Rya::AbortIf.logger.fatal "Couldn't sample reads after #{num_attempts}"
+
+      exit 1
+    end
+  end
+
+# Now run the assemblies
+  contig_files = []
+  sample_seqs_out.outputs[:subsample_file_names].each do |sample_num, fnames|
+    Rya::AbortIf.logger.info { "Assembling sample #{sample_num}" }
+
+    out_prefix          = sprintf "percent_%02d.sample_%d", percent, sample_num
+    sample_assembly_dir = File.join assembly_dir, out_prefix
+
+    if take
+      out_prefix = "#{take}.#{out_prefix}"
+    end
+
+    megahit_output = nil
+    Process.time_it "Running megahit", Rya::AbortIf.logger do
+      begin
+        num_attempts = Process.run_until_success max_attempts do
+          megahit_output =
+            MegahitRunners.run exe:           megahit_binary,
+                               forward_reads: fnames[:forward_reads],
+                               reverse_reads: fnames[:reverse_reads],
+                               single_reads:  fnames[:single_reads],
+                               out_dir:       sample_assembly_dir,
+                               out_prefix:    out_prefix,
+                               num_threads:   num_threads,
+                               preset:        ASSEMBLY_PRESET
+        end
+      rescue Rya::MaxAttemptsExceededError => err
+        Rya::AbortIf.logger.error "Couldn't complete assembly #{out_prefix} after #{num_attempts}. You will have to rerun it manually."
+      end
+    end
+
+    # Only do the cleanup if the assembly succefully completed.
+    if megahit_output.exitstatus.zero?
+      Process.time_it "Cleaning up assembly out directory", Rya::AbortIf.logger do
+        begin
+          num_attempts = Process.run_until_success max_attempts do
+            MegahitRunners.clean_up_out_dir zip_binary:   zip_binary,
+                                            assembly_dir: sample_assembly_dir,
+                                            num_threads:  num_threads
+          end
+        rescue Rya::MaxAttemptsExceededError => err
+          Rya::AbortIf.logger.error "Couldn't complete assembly directory cleanup for assembly #{out_prefix} after #{num_attempts}. You will have to rerun it manually."
+        end
+      end
+
+      # Also add the contig files to the container.
+      contig_files << megahit_output.outputs[:final_contigs]
+    end
+  end
+
+# Clean up....
+
+# Because we aren't sure if the zipping succeeded or not, we need to account for the fact that there might be .gz or .bz2 or something on the end of the contig file names.
+  all_contig_files = []
+  contig_files.each do |fname|
+    # Turn it into a glob
+    names = Dir.glob "#{fname}*"
+
+    names.each do |name|
+      all_contig_files << name
+    end
+  end
+
+# Move all the final contigs files into a single directory
+  FileUtils.mv all_contig_files.compact, contigs_dir
+
+# Remove subsamples
+  FileUtils.rm_r subsample_dir if Dir.exist?(subsample_dir)
+end

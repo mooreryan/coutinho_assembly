@@ -1,5 +1,8 @@
 # CoutinhoAssembly
 
+Run Coutinho's Epic Assembly Pipeline!
+
+It's based on Coutinho's epic 2017 paper:  https://doi.org/10.1038/ncomms15955
 
 ## Installation
 
