@@ -204,7 +204,7 @@ sampling_info.each do |(percent, num_samples)|
                                out_dir:       sample_assembly_dir,
                                out_prefix:    out_prefix,
                                num_threads:   num_threads,
-                               preset:        ASSEMBLY_PRESET
+                               preset:        megahit_preset
         end
       rescue Rya::MaxAttemptsExceededError => err
         Rya::AbortIf.logger.error "Couldn't complete assembly #{out_prefix} after #{num_attempts}. You will have to rerun it manually."

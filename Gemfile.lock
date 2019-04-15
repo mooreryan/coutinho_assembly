@@ -1,7 +1,7 @@
 PATH
   remote: .
   specs:
-    coutinho_assembly (0.2.0)
+    coutinho_assembly (0.2.1)
 
 GEM
   remote: https://rubygems.org/
