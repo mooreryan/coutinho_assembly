@@ -22,7 +22,11 @@ Or install it yourself as:
 
 ## Usage
 
-TODO: Write usage instructions here
+For usage instructions type
+
+```
+coutinho_assembly --help
+```
 
 ## Development
 

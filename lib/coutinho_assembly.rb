@@ -58,6 +58,8 @@ module CoutinhoAssembly
 
         if preset == "meta-sensitive"
           cmd += " --presets meta-sensitive"
+        elsif preset == "meta-large"
+          cmd += " --presets meta-large"
         elsif preset == "fast"
           cmd += " --k-list 21"
         end

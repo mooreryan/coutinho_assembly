@@ -1,5 +1,5 @@
 module CoutinhoAssembly
-  VERSION = "0.1.0"
+  VERSION = "0.2.0"
 
   COPYRIGHT = "2019 Ryan Moore"
   CONTACT   = "moorer@udel.edu"
