@@ -56,6 +56,7 @@ module CoutinhoAssembly
           cmd += " --out-prefix #{out_prefix}"
         end
 
+        # For preset of 'default' or anything else, just use the megahit default.
         if preset == "meta-sensitive"
           cmd += " --presets meta-sensitive"
         elsif preset == "meta-large"

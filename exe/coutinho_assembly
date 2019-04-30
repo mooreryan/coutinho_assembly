@@ -33,6 +33,8 @@ opts = Optimist.options do
 
   --sampling-percentage and --num-subsamples go together.  So, --sampling-percentage 1 5 10 --num-subsamples 50 35 25 would mean 50 1% subsamples, 35 5% subsamples, and 25 10% subsamples.
 
+  --megahit-presets See the megahit --help file for more information about these.  The "new" ones are fast which uses only kmer 21 assembly, and default, which uses whatever megahit has for the defaults.
+
   For the binary program options, either provide the path to the binary or the name of the program if the program is already on your path.
 
   Options:
@@ -79,8 +81,8 @@ opts = Optimist.options do
 
   # Megahit options
   opt(:megahit_presets,
-      "meta-sensitive, meta-large, or fast",
-      default: "meta-sensitive")
+      "meta-sensitive, meta-large, fast, or default",
+      default: "default")
 
   # External programs I depend on
   opt(:megahit_binary,
@@ -143,7 +145,7 @@ Rya::AbortIf.abort_if num_threads < 1,
 Rya::AbortIf.abort_if max_attempts < 1,
                       "--max-attempts must be at least 1"
 
-GOOD_PRESETS = %w[meta-sensitive meta-large fast]
+GOOD_PRESETS = %w[meta-sensitive meta-large fast default]
 megahit_preset = opts[:megahit_presets]
 Rya::AbortIf.abort_unless megahit_preset.nil? || GOOD_PRESETS.include?(megahit_preset),
                           "--megahit-presets must be one of #{GOOD_PRESETS.join(", ")}.  Got #{megahit_preset}"
